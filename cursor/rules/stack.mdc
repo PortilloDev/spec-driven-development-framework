@@ -1,0 +1,83 @@
+---
+description: Technology stack and operational standards for UpSpain backend
+alwaysApply: true
+---
+
+# Technology Stack
+
+## Backend
+- **Symfony 6.4** — PHP web framework
+- **PHP 8.3+** — Programming language with strict types enforced
+- **Composer** — Dependency manager (PSR-4 autoloading)
+
+## Database
+- **MySQL** — Production database
+- **Doctrine ORM** — Database abstraction
+- **Doctrine XML Mapping** — NOT annotations, NOT attributes
+  - Location: `src/{Module}/Infrastructure/Doctrine/Mapping/{Entity}.orm.xml`
+- **Migrations**: `bin/console doctrine:migrations:diff`
+
+## Async / Messaging
+- **Symfony Messenger** — Command/Query bus and async dispatch
+- **Azure Service Bus** — Transport for async messages (peek-lock mode with retry)
+- Sync by default; async via marker interface `AsyncMessageInterface`
+- Email async via `AsyncEmailSenderInterface`
+
+## API
+- **REST custom** (no API Platform)
+- Versioned under `/api/v1/`
+- **Nelmio API Doc** — OpenAPI/Swagger documentation via `OA\*` attributes
+- Request validation via Symfony Validator attributes on Payload classes
+- Response serialization via classes implementing `\JsonSerializable`
+
+## Authentication
+- **Lexik JWT Bundle** — JWT-based authentication
+
+## Testing
+- **PHPUnit** — Unit tests (Domain, Value Objects, Handlers)
+- **Behat** — Functional/acceptance tests (API endpoints, full scenarios)
+- Tests run inside Docker container
+
+### Test commands
+| Purpose | Command |
+|---------|---------|
+| Unit tests | `composer tests` |
+| Functional tests | `composer behat` |
+| Specific feature | `composer behat -- features/admin/X.feature` |
+| Code style fix | `composer phpcs` |
+| Static analysis | `composer phpstan` |
+
+### Test execution strategy by layer
+- **Domain layer changes** → PHPUnit only
+- **Application layer changes** → PHPUnit
+- **Infrastructure layer changes** → PHPUnit + Behat
+- **Controller / API changes** → always Behat
+
+## Code Quality
+- **PSR-12** — Coding standard, enforced by `php-cs-fixer` via `composer phpcs`
+- **PSR-4** — Autoloading standard
+- **PHPStan / Psalm** — Static analysis (optional, via `composer phpstan`)
+- `declare(strict_types=1);` mandatory in every PHP file
+- `readonly` for Commands, Queries, Value Objects, Handlers, Event Handlers
+- `final` for Controllers, Repository implementations, concrete Services
+
+## Version Control
+- **Git** with feature-branch flow
+- Branch naming: `feature/*`, `fix/*`, `refactor/*`, `bugfix/*`
+- Conventional Commits for commit messages
+
+## Environment
+- Configuration via `.env.local` (never commit `.env` files)
+- Docker for local dev and test execution
+
+## Internationalization
+- Symfony Translation component for all user-facing messages
+- Files in `translations/`:
+  - Errors: `errors+intl-icu.{lang}.yaml`
+  - Emails: `emails+intl-icu.{lang}.yaml`
+- Required languages (every error/email message must be translated to all):
+  `es`, `fr`, `en`, `gl` (gallego), `vl` (valenciano), `ct` (catalan), `eu` (euskera)
+
+## Module namespace convention
+- `App\{ModuleName}\{Domain|Application|Infrastructure}`
+- Example: `App\Member\Domain\Model\Member`

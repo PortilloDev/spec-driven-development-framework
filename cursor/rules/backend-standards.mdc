@@ -1,0 +1,172 @@
+---
+description: Symfony Hexagonal Architecture + CQRS contract
+alwaysApply: true
+---
+# Symfony Hexagonal Architecture with DDD + CQRS - Development Rules
+
+NEVER reverse this flow. Domain has zero framework dependencies.
+
+## Module structure
+
+Every feature lives under `src/{Module}/` with three layers:
+```
+src/{Module}/
+├── Domain/
+│   ├── Contracts/        # Repository and service interfaces (Ports)
+│   ├── Model/            # Aggregate Roots, Entities
+│   ├── Exception/        # Domain exceptions
+│   ├── Event/            # Domain Events
+│   └── Service/          # Domain Services (complex business logic)
+├── Application/
+│   ├── Command/{Action}/ # {Action}Command + {Action}CommandHandler
+│   ├── Query/{Name}/     # {Name}Query + {Name}QueryHandler + Filter
+│   ├── Event/            # Application Event Handlers
+│   └── Service/          # Application Services (orchestration only)
+└── Infrastructure/
+├── Doctrine/
+│   ├── Mapping/      # {Entity}.orm.xml (NOT annotations)
+│   └── Persistence/  # Doctrine{Entity}Repository
+└── Symfony/
+├── Controller/   # One controller class per endpoint, invokable
+└── Http/
+├── Request/  # {Action}{Entity}Payload (Symfony validation)
+└── Response/ # {Entity}Schema (JsonSerializable + OA\Schema)
+```
+
+Namespace pattern: `App\{Module}\{Layer}\...`
+
+## Layer rules
+
+### Domain
+- Pure PHP, typed properties, `declare(strict_types=1)`
+- NO Symfony, NO Doctrine annotations or attributes, NO infra concerns
+- Aggregate Roots extend `AggregateRoot`; private constructor + static `create()` factory
+- Value Objects are `readonly` and immutable
+- Repository interfaces live in `Domain/Contracts/`
+- Domain Exceptions extend `DomainException`, with static factory methods (e.g. `MemberCreationException::organizationNotFound()`)
+
+### Application
+- Only orchestration; NO business logic, NO direct DB access
+- Commands and Queries are `readonly class`
+- Handlers are `readonly`, implement `HandlerInterface`, exposed as `__invoke({Command|Query} $msg)`
+- Use Domain repositories through their interfaces
+- Async by implementing `AsyncMessageInterface` (sync is default)
+- Nested commands dispatched via `DispatcherInterface`
+
+### Infrastructure
+- Controllers are `final class`, invokable
+- Implements Domain interfaces
+- Doctrine repositories extend `ServiceEntityRepository` and implement the Domain contract
+- Doctrine mapping in XML (`{Entity}.orm.xml`)
+- Payloads use Symfony Validator attributes
+- Schemas implement `\JsonSerializable` and add `#[OA\Schema(...)]`
+
+## CQRS contract
+
+| Operation | Component | Returns |
+|-----------|-----------|---------|
+| Create | Command + Handler | `Uid` |
+| Update / Delete | Command + Handler | `void` |
+| Read (single) | Query + Handler | DTO or domain object |
+| Read (list) | Query + Handler | `PaginationResults` |
+
+Commands are imperative (`CreateMember`, `UpdateMemberRole`).
+Queries are descriptive (`MemberListQuery`, `MemberInfoQuery`).
+Filter objects encapsulate complex query criteria; pagination via `Page` + `PaginationResults`.
+
+## Domain events
+
+- Recorded inside the aggregate, e.g. `$this->events[] = new MemberCreatedEvent(...)`
+- Pattern: `{Noun}{PastVerb}Event` (e.g. `MemberCreatedEvent`, `MemberDeactivatedEvent`)
+- Dispatched after persistence by the handler or via Messenger middleware
+
+## Messenger
+
+- Buses configured in `config/packages/messenger.yaml`
+- Middleware in use: `CacheMiddleware`, `LockMiddleware`
+- Routing:
+  - `App\Shared\Domain\Command` → sync
+  - `App\Shared\Domain\Bus\AsyncMessageInterface` → async
+  - `App\Shared\Domain\Bus\AsyncEmailSenderInterface` → email_async
+
+## Naming conventions
+
+| Component | Pattern | Example |
+|-----------|---------|---------|
+| Command | `{Verb}{Noun}Command` | `CreateMemberCommand` |
+| Query | `{Noun}{Subject}Query` | `MemberListQuery` |
+| Handler | `{MessageName}Handler` | `CreateMemberCommandHandler` |
+| Event | `{Noun}{PastVerb}Event` | `MemberCreatedEvent` |
+| Aggregate / Entity | Singular noun | `Member`, `Product` |
+| Value Object | Descriptive noun | `Email`, `Uid`, `MemberId` |
+| Repository interface | `{Entity}RepositoryInterface` | `MemberRepositoryInterface` |
+| Repository impl | `Doctrine{Entity}Repository` | `DoctrineMemberRepository` |
+| Controller | `{Verb}{Noun}Controller` | `CreateMemberController` |
+| Request payload | `{Verb}{Noun}Payload` | `CreateMemberPayload` |
+| Response schema | `{Noun}Schema` | `MemberSchema` |
+
+## Code style
+
+- `declare(strict_types=1);` mandatory
+- `readonly` for: Commands, Queries, Value Objects, Handlers, Event Handlers
+- `final` for: Controllers, Repository implementations, concrete Services
+- Nullable parameters always default to `null` and use `?Type` notation
+- PSR-12 (enforced by `composer phpcs`)
+- Use type hints everywhere, descriptive names, no abbreviations
+- No markdown files generated as part of feature implementation
+- Infrastructure → Application → Domain dependencies only, never the reverse
+
+## Testing strategy
+
+- Unit tests (PHPUnit): Domain entities, Value Objects, Application Handlers (with mocks, no DB)
+- Functional tests (Behat): API endpoints under `features/`, full scenarios with real container
+- Test layout mirrors `src/`:
+- tests/{Module}/{Domain|Application|Infrastructure}/
+- features/{area}/{module}/*.feature
+
+## Architecture checklist (apply during implementation)
+
+**Domain**
+- [ ] Aggregate Roots extend `AggregateRoot` with private constructor + static `create()`
+- [ ] Value Objects are `readonly`
+- [ ] Repository interfaces in `Domain/Contracts/`
+- [ ] Domain exceptions use static factory methods with translation keys
+
+**Application**
+- [ ] Commands and Queries are `readonly class`
+- [ ] Handlers implement `HandlerInterface` via `__invoke()`
+- [ ] Returns: `Uid` for create, `void` for update/delete, DTO or `PaginationResults` for read
+
+**Infrastructure**
+- [ ] Controllers are `final class`, invokable
+- [ ] Payloads use Symfony Validator attributes
+- [ ] Schemas implement `\JsonSerializable` with `#[OA\Schema(...)]`
+- [ ] Doctrine mapping in XML
+- [ ] Repository extends `ServiceEntityRepository` and implements the Domain interface
+
+
+## Technology Stack
+
+### Core Technologies
+- **PHP**: 8.2+ with strict types
+- **Symfony**: 6.4 LTS
+- **Doctrine ORM**: Database abstraction with XML mapping
+- **Symfony Messenger**: Command/Query bus
+
+### Testing
+- **PHPUnit**: Unit testing
+- **Behat**: Functional/BDD testing
+- **DAMA Doctrine Test Bundle**: Database isolation
+
+### Code Quality
+- **php-cs-fixer**: Code formatting (PSR-12)
+- **PHPStan**: Static analysis
+- **Rector**: Automated refactoring
+
+### Authentication
+- **Lexik JWT Bundle**: JWT authentication
+- **Gesdinet JWT Refresh**: Token refresh
+
+### API Documentation
+- **Nelmio API Doc**: OpenAPI/Swagger generation
+- **zircote/swagger-php**: OpenAPI attributes

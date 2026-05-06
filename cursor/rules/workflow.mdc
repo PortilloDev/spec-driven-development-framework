@@ -1,0 +1,100 @@
+---
+description: Spec-Driven Development workflow — quick reference
+alwaysApply: true
+---
+
+# SDD Workflow — quick reference
+
+This project uses a custom Spec-Driven Development workflow with three
+personas (architect, developer, reviewer) coordinated through five slash
+commands. Authoritative details live in `.cursor/commands/*.md`.
+
+## Pipeline
+
+```
+/design feature-name
+↓ (architect persona)
+.cursor/specs/{feature}/
+├── 00-global-spec.md
+├── 00-technical-plan.md
+├── tasks/NN-{layer}.md
+└── status.md
+↓
+/build @.../tasks/NN-{layer}.md
+↓ (developer persona — TDD)
+status: ready for review
+↓
+/review
+↓ (reviewer persona)
+APPROVED → /build next task
+CHANGES  → /build same task (fixing only flagged issues)
+↓ (after all tasks done)
+/review --commit (creates Conventional Commit)
+```
+## Commands
+
+| Command | Persona | Effect |
+|---------|---------|--------|
+| `/design` | architect | Creates the four-file spec structure |
+| `/build` | developer | Implements ONE task with TDD, stops |
+| `/review` | reviewer | Audits last task, approves or returns issues |
+| `/test` | none | Runs test suites independently |
+| `/refactor` | none | Quality pass: phpcs + phpstan |
+
+## Persona enforcement
+
+The personas are NOT decorative. Each command starts by loading
+`.cursor/skills/skill-{role}.md` and the model must operate within that
+skill's boundaries:
+
+- The architect does NOT write production code.
+- The developer does NOT skip TDD or auto-advance to the next task.
+- The reviewer does NOT modify source code.
+
+Cross-persona pollution is the failure mode this workflow exists to prevent.
+
+## Spec structure (mandatory)
+
+Every feature spec lives at `.cursor/specs/{feature-name}/` with:
+
+- `00-global-spec.md` — what & why (problem, criteria, edge cases)
+- `00-technical-plan.md` — how (API contract, CQRS, structure, deps)
+- `tasks/NN-{layer}.md` — single-commit mini-specs (≤ 2h each)
+- `status.md` — progress tracker
+
+Tasks are numbered by layer dependency:
+01 Domain → 02 Application → 03 Infrastructure → 04 Integration.
+Layers can be skipped or split (`02a-commands.md`, `02b-queries.md`).
+
+## Architectural contract
+
+All implementations follow the architectural contract in
+`.cursor/rules/backend-standards.mdc`. The reviewer enforces it.
+
+Infrastructure → Application → Domain
+| Operation | Component | Returns |
+|-----------|-----------|---------|
+| Create | Command + Handler | `Uid` |
+| Update / Delete | Command + Handler | `void` |
+| Read | Query + Handler | DTO / `PaginationResults` |
+
+## Test execution by layer
+
+| Layer touched | Tests |
+|---------------|-------|
+| Domain | `composer tests` |
+| Application | `composer tests` |
+| Infrastructure | `composer tests` + `composer behat` |
+| Controller / API | always `composer behat` |
+
+Tests run inside the Docker container.
+
+## Definition of Done (per task)
+
+A task is done when `/review` returns APPROVED:
+1. All acceptance criteria from the global spec covered
+2. All implementation checklist items in the mini-spec completed
+3. Tests for this layer green
+4. `composer phpcs` clean, `composer phpstan` clean
+5. Architectural checklist satisfied
+6. `status.md` updated to `done`
