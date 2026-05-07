@@ -38,9 +38,9 @@ flags. That separation is what makes the loop converge instead of drift.
 
 ```bash
 # 1. Apply the framework to your project
-npx degit ivan-rdz/sdd-cursor/symfony-php/template .cursor
+npx degit [ivan-rdz/sdd-cursor/symfony-php/template](https://github.com/PortilloDev/spec-driven-development-framework) .cursor
 
-# 2. Personalize stack and conventions
+# 2. Personalize stack and conventions (pending implement)
 bash .cursor/bootstrap.sh
 
 # 3. In Cursor, design your first feature
