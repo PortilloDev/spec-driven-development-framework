@@ -1,0 +1,172 @@
+---
+description: Hexagonal Architecture for Python / FastAPI
+alwaysApply: true
+---
+
+# Hexagonal Architecture (Ports & Adapters) — Scout
+
+## Dependency flow (CRITICAL)
+
+Infrastructure → Application → Domain
+
+NEVER reverse this flow. Domain has zero framework imports — no FastAPI,
+no Pydantic, no SQLAlchemy. Pure Python with type hints.
+
+## Module structure
+````
+src/scout/
+├── domain/
+│   ├── models/         # dataclasses (frozen=True), pure Python
+│   ├── exceptions/     # domain errors
+│   ├── events/         # domain events (optional, dataclasses)
+│   └── ports/          # Protocols (repository and service interfaces)
+├── application/
+│   ├── services/       # one service per use case (AnalyzeMetricService...)
+│   └── dtos/           # plain dataclasses for service input/output
+└── infrastructure/
+├── api/
+│   ├── routers/    # FastAPI APIRouter, one file per resource
+│   ├── schemas/    # Pydantic v2 request/response models
+│   └── deps.py     # Depends() factories
+├── persistence/
+│   ├── models/     # SQLAlchemy declarative models
+│   ├── repositories/  # SqlalchemyXRepository implementations
+│   └── session.py  # AsyncSession factory
+├── llm/            # Anthropic Claude adapter
+├── prometheus/     # Prometheus HTTP API client
+└── config/         # Pydantic Settings
+tests/
+├── unit/               # pytest -m unit (domain, application)
+├── integration/        # pytest -m integration (persistence, external clients)
+└── e2e/                # pytest -m e2e (full API flows)
+````
+## Layer rules
+
+### Domain
+- Pure Python, fully typed (`from __future__ import annotations`)
+- Models are `@dataclass(frozen=True, slots=True)` when immutable
+- Mutable aggregates use `@dataclass` without `frozen` but expose only methods
+  (no direct attribute mutation from outside)
+- NO imports from FastAPI, Pydantic, SQLAlchemy, anthropic, httpx, etc.
+- Ports are `typing.Protocol` classes with `@runtime_checkable` if checked at runtime
+- Domain exceptions inherit from a base `DomainError`; use class-level static
+  factory methods for common cases:
+```python
+  class MetricNotFoundError(DomainError):
+      @classmethod
+      def with_id(cls, metric_id: str) -> "MetricNotFoundError":
+          return cls(f"Metric {metric_id} not found")
+```
+
+### Application
+- One service per use case, named `{Verb}{Noun}Service` (e.g. `AnalyzeMetricService`)
+- Services are classes with `__init__` that takes ports (repos, clients) as deps
+- Public method is `async def execute(input: XInput) -> XOutput`
+- DTOs (`XInput`, `XOutput`) are `@dataclass` in `application/dtos/`
+- NO business logic — orchestration and policy only
+- NO direct DB calls — only via injected repositories
+
+### Infrastructure
+- Routers: one `APIRouter` per resource, mounted under `/api/v1/`
+- Pydantic schemas live ONLY in `infrastructure/api/schemas/`. Never in domain.
+- Routers are thin: parse Pydantic request → call service → serialize Pydantic response
+- SQLAlchemy declarative models in `infrastructure/persistence/models/`
+- Repositories implement Domain Protocols and depend on `AsyncSession`
+- Repositories return Domain objects, NEVER SQLAlchemy models
+- External clients (Claude, Prometheus) implement Domain ports too
+
+## Service contract
+
+Every use case follows this shape:
+
+```python
+# application/services/analyze_metric_service.py
+class AnalyzeMetricService:
+    def __init__(
+        self,
+        metrics_repo: MetricsRepository,    # Domain Protocol
+        llm_client: LlmClient,              # Domain Protocol
+    ) -> None:
+        self._metrics_repo = metrics_repo
+        self._llm_client = llm_client
+
+    async def execute(self, input: AnalyzeMetricInput) -> AnalyzeMetricOutput:
+        ...
+```
+
+Service input/output dataclasses live in `application/dtos/`.
+
+| Operation | Returns |
+|-----------|---------|
+| Create | DTO with the new entity's id |
+| Update / Delete | DTO with status only, or `None` |
+| Read (single) | DTO mirroring the domain object |
+| Read (list) | DTO with `items: list[...]` and pagination metadata |
+
+## Domain events (optional)
+
+If a use case emits domain events:
+- Define event as `@dataclass(frozen=True)` in `domain/events/`
+- Pattern: `{Noun}{PastVerb}Event` (e.g. `AnomalyDetectedEvent`)
+- Event publishing via a `DomainEventPublisher` Protocol; default in-memory impl
+  for v1, replaceable later
+
+## Naming conventions
+
+| Component | Pattern | Example |
+|-----------|---------|---------|
+| Service (use case) | `{Verb}{Noun}Service` | `AnalyzeMetricService` |
+| Service input DTO | `{Verb}{Noun}Input` | `AnalyzeMetricInput` |
+| Service output DTO | `{Verb}{Noun}Output` | `AnalyzeMetricOutput` |
+| Domain model | Singular noun | `Metric`, `Anomaly` |
+| Domain exception | `{Concept}Error` | `MetricNotFoundError` |
+| Domain event | `{Noun}{PastVerb}Event` | `AnomalyDetectedEvent` |
+| Repository port | `{Entity}Repository` (Protocol) | `MetricsRepository` |
+| Repository impl | `Sqlalchemy{Entity}Repository` | `SqlalchemyMetricsRepository` |
+| External client port | `{Service}Client` (Protocol) | `LlmClient`, `PrometheusClient` |
+| FastAPI router file | `{resource}.py` | `metrics.py`, `anomalies.py` |
+| Request schema | `{Verb}{Noun}Request` | `AnalyzeMetricRequest` |
+| Response schema | `{Noun}Response` | `MetricResponse`, `AnomalyResponse` |
+
+## Code style
+
+- `from __future__ import annotations` at top of every file
+- Type hints on every function signature, including `-> None`
+- mypy strict — no implicit `Any`
+- ruff format and ruff check must be clean
+- No `print()` — use `structlog` logger
+- No commented-out code in commits
+- No `TODO` without an issue reference
+- Tests, code, comments, docstrings: all in English
+
+## Testing strategy
+
+| Layer | Test type | Marker | Location |
+|-------|-----------|--------|----------|
+| Domain | pure unit, no I/O | `@pytest.mark.unit` | `tests/unit/domain/` |
+| Application | unit with mocks for ports | `@pytest.mark.unit` | `tests/unit/application/` |
+| Infrastructure (persistence) | integration with real PostgreSQL | `@pytest.mark.integration` | `tests/integration/persistence/` |
+| Infrastructure (api) | e2e via httpx.AsyncClient | `@pytest.mark.e2e` | `tests/e2e/api/` |
+
+Test layout mirrors `src/`. Test files named `test_{module}.py`.
+
+## Architecture checklist (apply during implementation)
+
+**Domain**
+- [ ] No imports from `fastapi`, `pydantic`, `sqlalchemy`, or any framework
+- [ ] Models use `@dataclass`; immutable ones use `frozen=True`
+- [ ] Ports are `typing.Protocol`
+- [ ] Exceptions inherit from `DomainError` and use named factory methods
+
+**Application**
+- [ ] Service classes with constructor-injected ports
+- [ ] Public method is `async def execute(input) -> output`
+- [ ] DTOs live in `application/dtos/`, not co-located with services
+- [ ] No SQLAlchemy or HTTP client imports
+
+**Infrastructure**
+- [ ] Pydantic schemas only in `infrastructure/api/schemas/`
+- [ ] Routers thin: schema → service → schema
+- [ ] Repositories return Domain objects, never SQLAlchemy models
+- [ ] Repositories take `AsyncSession` via constructor or method param
+- [ ] All I/O is `async`

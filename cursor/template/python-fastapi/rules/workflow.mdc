@@ -1,0 +1,109 @@
+---
+description: Spec-Driven Development workflow — quick reference (Scout)
+alwaysApply: true
+---
+
+# SDD Workflow — quick reference
+
+This project uses a custom Spec-Driven Development workflow with three
+personas (architect, developer, reviewer) coordinated through five slash
+commands. Authoritative details live in `.cursor/commands/*.md`.
+
+## Pipeline
+
+````
+/design feature-name
+↓ (architect persona)
+.cursor/specs/{feature}/
+├── 00-global-spec.md
+├── 00-technical-plan.md
+├── tasks/NN-{layer}.md
+└── status.md
+↓
+/build @.../tasks/NN-{layer}.md
+↓ (developer persona — TDD with pytest)
+status: ready for review
+↓
+/review
+↓ (reviewer persona)
+APPROVED → /build next task
+CHANGES  → /build same task (fixing only flagged issues)
+↓ (after all tasks done)
+/review --commit (creates Conventional Commit)
+```
+
+## Commands
+
+| Command | Persona | Effect |
+|---------|---------|--------|
+| `/design` | architect | Creates the four-file spec structure |
+| `/build` | developer | Implements ONE task with TDD, stops |
+| `/review` | reviewer | Audits last task, approves or returns issues |
+| `/test` | none | Runs pytest suites independently |
+| `/refactor` | none | Quality pass: ruff + mypy |
+
+## Persona enforcement
+
+Each command starts by loading `.cursor/skills/{role}/SKILL.md` and the
+model must operate within that skill's boundaries:
+
+- The architect does NOT write production code.
+- The developer does NOT skip TDD or auto-advance to the next task.
+- The reviewer does NOT modify source code.
+
+## Spec structure (mandatory)
+
+Every feature spec lives at `.cursor/specs/{feature-name}/` with:
+
+- `00-global-spec.md` — what & why
+- `00-technical-plan.md` — how (API, services, ports, structure)
+- `tasks/NN-{layer}.md` — single-commit mini-specs (≤ 2h each)
+- `status.md` — progress tracker
+
+Default decomposition by layer:
+01 Domain → 02 Application → 03 Infrastructure → 04 Integration.
+Layers can be skipped (read-only feature with no domain changes) or split
+(`02a-services.md`, `02b-events.md`).
+
+## Architectural contract
+
+All implementations follow `.cursor/rules/architecture.mdc`. The reviewer
+enforces it.
+
+Infrastructure → Application → Domain
+
+| Operation | Component | Returns |
+|-----------|-----------|---------|
+| Use case | Service.execute() | DTO |
+| Read (list) | Service.execute() | DTO with items list |
+
+## Test execution by layer
+
+| Layer touched | Tests |
+|---------------|-------|
+| `domain/` | `pytest -m unit` |
+| `application/` | `pytest -m unit` |
+| `infrastructure/persistence/` | `pytest -m "unit or integration"` |
+| `infrastructure/api/` | `pytest -m "unit or integration or e2e"` |
+
+Tests run inside the Docker container:
+`docker compose exec backend uv run pytest -m {marker}`
+
+## Quality gates
+
+| Tool | Command | Required |
+|------|---------|----------|
+| ruff format | `uv run ruff format --check` | clean |
+| ruff lint | `uv run ruff check` | clean |
+| mypy | `uv run mypy src/` | clean (strict mode) |
+| pytest | per layer (see above) | green |
+
+## Definition of Done (per task)
+
+A task is done when `/review` returns APPROVED:
+1. Acceptance criteria from global spec covered
+2. Implementation checklist in mini-spec completed
+3. Tests for layer green
+4. ruff format/check clean, mypy clean
+5. Architectural checklist satisfied
+6. `status.md` updated to `done`
